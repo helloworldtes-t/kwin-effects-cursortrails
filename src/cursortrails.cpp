@@ -3,10 +3,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
-
 #include "cursortrails.h"
 #include "trailsconfig.h"
-
 #include "core/rendertarget.h"
 
 #define PI 3.14159
@@ -14,181 +12,187 @@
 namespace KWin
 {
 
-
-ParticleEmitter::ParticleEmitter(unsigned int am)
-{
-    amount = am;
-    particles = new Particle[am];
-    currentDelta = QTime::currentTime();
-    init();
-}
-
-void ParticleEmitter::update(unsigned int newParticles, QVector2D offset, bool spawnNew)
-{
-    if(spawnNew)
+    ParticleEmitter::ParticleEmitter(unsigned int am)
     {
-        for (unsigned int i = 0; i < newParticles; i++)
+        amount = am;
+        particles = new Particle[am];
+        m_timer.start(); // Initialize monotonic clock tracking
+        init();
+    }
+
+    void ParticleEmitter::update(unsigned int newParticles, QVector2D offset, bool spawnNew)
+    {
+        if(spawnNew)
         {
-            int unusedParticle = firstUnusedParticle();
-            respawnParticle(particles[unusedParticle], offset);
+            for (unsigned int i = 0; i < newParticles; i++)
+            {
+                int unusedParticle = firstUnusedParticle();
+                respawnParticle(particles[unusedParticle], offset);
+            }
+        }
+
+        if(aura)
+            cursorParticle.position = offset;
+
+        // Fixed: Removed the 'if(activeParticles == 0) return;' block
+        // to ensure particle life steps decrement accurately on empty loops
+
+        for (unsigned int i = 0; i < amount; ++i) {
+            Particle &p = particles[i];
+            if (p.life > 0.0f) {
+                p.life -= dt;
+
+                p.color.setW(p.color.w() - dt * duration);
+                if(p.color.w() < 0.0) p.color.setW(0.0);
+
+                p.position += p.velocity * dt;
+            }
         }
     }
 
-    if(aura)
-        cursorParticle.position = offset;
-
-    if(activeParticles == 0) return;
-
-    for (unsigned int i = 0; i < amount; ++i) {
-        Particle &p = particles[i];
-        p.life -= dt;
-        if (p.life > 0.0f) {
-
-            p.color.setW(p.color.w() - dt * duration);
-            if(p.color.w() < 0.0) p.color.setW(0.0);
-
-            p.position += p.velocity * dt;
-        }
+    void ParticleEmitter::respawnParticle(Particle &particle, QVector2D offset)
+    {
+        particle.position = offset;
+        particle.color = QVector4D(0.0, 0.0, 0.0, 1.0f);
+        particle.life = 1.0f;
+        particle.velocity = QVector2D((aura ? 50.0 : 0.0), 0.0);
     }
-}
 
-void ParticleEmitter::respawnParticle(Particle &particle, QVector2D offset)
-{
-    particle.position = offset;
-    particle.color = QVector4D(0.0, 0.0, 0.0, 1.0f); // Used to control the opacity, in the future the afterimages can have color
-    particle.life = 1.0f;
-
-    particle.velocity = QVector2D((aura ? 50.0 : 0.0), 0.0);
-}
-
-
-void ParticleEmitter::init()
-{
-    float particle_quad[] =
+    void ParticleEmitter::init()
     {
-        // position // UV
-        0.0f, 1.0f, 0.0f, 1.0f,
-        1.0f, 0.0f, 1.0f, 0.0f,
-        0.0f, 0.0f, 0.0f, 0.0f,
-
-        0.0f, 1.0f, 0.0f, 1.0f,
-        1.0f, 1.0f, 1.0f, 1.0f,
-        1.0f, 0.0f, 1.0f, 0.0f
-    };
-
-    cursorParticle.velocity = QVector2D((0.0), 0.0);
-    cursorParticle.color = QVector4D(0.0, 0.0, 0.0, 1.0);
-
-    int VAO_old;
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &VAO_old);
-
-    unsigned int VBO;
-    glGenVertexArrays(1, &VAO);
-    glGenBuffers(1, &VBO);
-    glGenBuffers(1, &instanceVBO);
-
-    glBindVertexArray(VAO);
-
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(particle_quad), particle_quad, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-
-    glBindBuffer(GL_ARRAY_BUFFER, instanceVBO);
-    glBufferData(GL_ARRAY_BUFFER, amount * sizeof(QVector4D) * 2, NULL, GL_DYNAMIC_DRAW);
-
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 2 * sizeof(QVector4D), (void*)0);
-    glVertexAttribDivisor(1, 1);
-
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, 2 * sizeof(QVector4D), (void*)(sizeof(QVector4D)));
-    glVertexAttribDivisor(2, 1);
-
-    glBindVertexArray(VAO_old);
-}
-
-void ParticleEmitter::draw(QMatrix4x4 mvp, GLShader *shader, const RenderViewport &viewport, GLTexture* texture, const RenderTarget &renderTarget)
-{
-    if(texture == nullptr) return;
-    std::vector<QVector4D> instanceData;
-    instanceData.reserve(amount * 2 + (aura ? 2 : 0));
-
-    activeParticles = 0;
-    for (unsigned int i = 0; i < amount; i++)
-    {
-        if (particles[i].life >= 0.0f)
+        float particle_quad[] =
         {
-            auto newPos = particles[i].position * viewport.scale();
+            0.0f, 1.0f, 0.0f, 1.0f,
+            1.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 0.0f,
+
+            0.0f, 1.0f, 0.0f, 1.0f,
+            1.0f, 1.0f, 1.0f, 1.0f,
+            1.0f, 0.0f, 1.0f, 0.0f
+        };
+
+        cursorParticle.velocity = QVector2D((0.0), 0.0);
+        cursorParticle.color = QVector4D(0.0, 0.0, 0.0, 1.0);
+
+        int VAO_old;
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &VAO_old);
+
+        unsigned int VBO;
+        glGenVertexArrays(1, &VAO);
+        glGenBuffers(1, &VBO);
+        glGenBuffers(1, &instanceVBO);
+
+        glBindVertexArray(VAO);
+
+        glBindBuffer(GL_ARRAY_BUFFER, VBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(particle_quad), particle_quad, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+
+        glBindBuffer(GL_ARRAY_BUFFER, instanceVBO);
+        // Fixed: Added allocation room padding (+ 2) for the aura layer attributes
+        glBufferData(GL_ARRAY_BUFFER, (amount + 2) * sizeof(QVector4D) * 2, NULL, GL_DYNAMIC_DRAW);
+
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 2 * sizeof(QVector4D), (void*)0);
+        glVertexAttribDivisor(1, 1);
+
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, 2 * sizeof(QVector4D), (void*)(sizeof(QVector4D)));
+        glVertexAttribDivisor(2, 1);
+
+        glBindVertexArray(VAO_old);
+    }
+
+    void ParticleEmitter::draw(QMatrix4x4 mvp, GLShader *shader, const RenderViewport &viewport, GLTexture* texture, const RenderTarget &renderTarget)
+    {
+        if(texture == nullptr) return;
+        std::vector<QVector4D> instanceData;
+        instanceData.reserve((amount + 2) * 2);
+
+        activeParticles = 0;
+        for (unsigned int i = 0; i < amount; i++)
+        {
+            if (particles[i].life > 0.0f) // Checked strictly against positive lifetime limits
+            {
+                auto newPos = particles[i].position * viewport.scale();
+                instanceData.push_back(QVector4D(newPos.x(), newPos.y(), texture->width() * viewport.scale(), texture->height() * viewport.scale()));
+                instanceData.push_back(particles[i].color);
+                activeParticles++;
+            }
+        }
+
+        if(aura)
+        {
+            auto newPos = cursorParticle.position * viewport.scale();
             instanceData.push_back(QVector4D(newPos.x(), newPos.y(), texture->width() * viewport.scale(), texture->height() * viewport.scale()));
-            instanceData.push_back(particles[i].color);
+            instanceData.push_back(cursorParticle.color);
             activeParticles++;
         }
+
+        if (activeParticles == 0) return;
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+
+        glBindBuffer(GL_ARRAY_BUFFER, instanceVBO);
+        // Fixed: Safely dynamic size calculating for modern Mesa graphics driver backends
+        glBufferSubData(GL_ARRAY_BUFFER, 0, instanceData.size() * sizeof(QVector4D), instanceData.data());
+
+        ShaderManager::instance()->pushShader(shader);
+        shader->setUniform(GLShader::Mat4Uniform::ModelViewProjectionMatrix, mvp);
+        const auto toXYZ = renderTarget.colorDescription()->containerColorimetry().toXYZ();
+        shader->setUniform(GLShader::Vec3Uniform::PrimaryBrightness, QVector3D(toXYZ(1, 0), toXYZ(1, 1), toXYZ(1, 2)));
+        shader->setColorspaceUniforms(ColorDescription::sRGB, renderTarget.colorDescription(), RenderingIntent::Perceptual);
+
+        texture->bind();
+
+        int VAO_old;
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &VAO_old);
+        glBindVertexArray(VAO);
+        glDrawArraysInstanced(GL_TRIANGLES, 0, 6, activeParticles);
+        glBindVertexArray(VAO_old);
+
+        texture->unbind();
+        ShaderManager::instance()->popShader();
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
     }
 
-    if(aura)
-    {
-        auto newPos = cursorParticle.position * viewport.scale();
-        instanceData.push_back(QVector4D(newPos.x(), newPos.y(), texture->width() * viewport.scale(), texture->height() * viewport.scale()));
-        instanceData.push_back(cursorParticle.color);
-        activeParticles++;
-    }
-
-    if (activeParticles == 0) return;
-
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDepthMask(GL_FALSE);
-
-    glBindBuffer(GL_ARRAY_BUFFER, instanceVBO);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, activeParticles * sizeof(QVector4D) * 2 + (aura ? 2 : 0), &instanceData[0]);
-
-    ShaderManager::instance()->pushShader(shader);
-    shader->setUniform(GLShader::Mat4Uniform::ModelViewProjectionMatrix, mvp);
-    const auto toXYZ = renderTarget.colorDescription()->containerColorimetry().toXYZ();
-    shader->setUniform(GLShader::Vec3Uniform::PrimaryBrightness, QVector3D(toXYZ(1, 0), toXYZ(1, 1), toXYZ(1, 2)));
-    shader->setColorspaceUniforms(ColorDescription::sRGB, renderTarget.colorDescription(), RenderingIntent::Perceptual);
-
-    texture->bind();
-
-    int VAO_old;
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &VAO_old);
-    glBindVertexArray(VAO);
-    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, activeParticles);
-    glBindVertexArray(VAO_old);
-
-    texture->unbind();
-    ShaderManager::instance()->popShader();
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDepthMask(GL_TRUE);
-    glDisable(GL_BLEND);
-}
-unsigned int ParticleEmitter::firstUnusedParticle() {
-    for (unsigned int i = lastUsedParticle; i < amount; i++)
-    {
-        if (particles[i].life <= 0.0f)
+    unsigned int ParticleEmitter::firstUnusedParticle() {
+        for (unsigned int i = lastUsedParticle; i < amount; i++)
         {
-            lastUsedParticle = i;
-            return i;
+            if (particles[i].life <= 0.0f)
+            {
+                lastUsedParticle = i;
+                return i;
+            }
+        }
+        for (unsigned int i = 0; i < lastUsedParticle; ++i)
+        {
+            if (particles[i].life <= 0.0f)
+            {
+                lastUsedParticle = i;
+                return i;
+            }
+        }
+        lastUsedParticle = 0;
+        return 0;
+    }
+
+    void ParticleEmitter::updateDelta()
+    {
+        // Fixed: High precision tracking step that is immune to midnight time jumps
+        qint64 elapsedMsecs = m_timer.restart();
+        dt = elapsedMsecs / 1000.0;
+
+        // Safety guard clamp for stutters, display sleeps, or workspace swaps
+        if (dt > 0.1 || dt < 0.0) {
+            dt = 0.01666;
         }
     }
-    for (unsigned int i = 0; i < lastUsedParticle; ++i)
-    {
-        if (particles[i].life <= 0.0f)
-        {
-            lastUsedParticle = i;
-            return i;
-        }
-    }
-    lastUsedParticle = 0;
-    return 0;
-}
-void ParticleEmitter::updateDelta()
-{
-    oldDelta = currentDelta;
-    currentDelta = QTime::currentTime();
-    dt = (oldDelta.msecsTo(currentDelta) / 1000.0);
-}
 void ParticleEmitter::setFrequency(unsigned int f)
 {
     frequency = f;
@@ -284,6 +288,7 @@ bool CursorTrailEffect::paintScreen(const RenderTarget &renderTarget, const Rend
     m_emitter->draw(viewport.projectionMatrix(), m_shader.get(), viewport, m_cursorShape.get(), renderTarget);
     return true;
 }
+
 
 void CursorTrailEffect::postPaintScreen()
 {

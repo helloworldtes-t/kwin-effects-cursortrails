@@ -14,6 +14,7 @@
 #include <QVector2D>
 #include <QVector4D>
 #include <QRandomGenerator>
+#include <QElapsedTimer>
 
 #include "effect/timeline.h"
 #include "effect/effecthandler.h"
@@ -70,8 +71,7 @@ private:
     unsigned int lastUsedParticle = 0;
     unsigned int activeParticles = 0;
 
-    QTime oldDelta;
-    QTime currentDelta;
+    QElapsedTimer m_timer; // Changed from QTime
     double dt = 0.0;
 
     unsigned int minSize = 2;
